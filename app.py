@@ -1,37 +1,69 @@
-
 import os
 import re
 import json
-import time
-import html
 import itertools
+import html
+from collections import defaultdict
 
-import streamlit as st
-import streamlit.components.v1 as components
 import pandas as pd
+import streamlit as st
 from google import genai
 
-
-# ==================================================
-# 1. PAGE SETTINGS
-# ==================================================
+# ============================================================
+# AI-BASED LOGIC GATE CIRCUIT DESIGNER - UPGRADED APP
+# Supports complex COMBINATIONAL circuits represented as
+# networks of two-input gates and one-input NOT gates.
+# ============================================================
 
 st.set_page_config(
-    page_title="AI Logic Circuit Designer",
+    page_title="Agentic AI Logic Circuit Designer",
     page_icon="⚡",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-st.title("⚡ AI-Based Logic Gate Circuit Designer")
-st.write(
-    "Describe a digital logic circuit and generate its "
-    "logic diagram, truth table, Boolean expressions and Verilog code."
-)
+# --------------------------- MODERN FRONTEND THEME ---------------------------
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+:root { color-scheme: dark; }
+html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
+.stApp { background: radial-gradient(circle at 12% 0%, #172554 0, #0b1224 36%, #070b16 100%); color: #e5edff; }
+[data-testid="stHeader"] { background: rgba(7,11,22,.82); }
+[data-testid="stSidebar"] { background: linear-gradient(180deg,#101a32 0%,#0b1224 100%); border-right: 1px solid #263657; }
+[data-testid="stSidebar"] * { color: #e5edff; }
+.block-container { padding-top: 2rem; padding-bottom: 3rem; max-width: 1450px; }
+.hero { padding: 28px 30px; border: 1px solid rgba(103,232,249,.28); border-radius: 22px; background: linear-gradient(120deg,rgba(30,64,175,.38),rgba(88,28,135,.25)),rgba(15,23,42,.88); box-shadow: 0 16px 45px rgba(0,0,0,.24); margin-bottom: 22px; }
+.hero-kicker { color:#67e8f9; font-size:12px; font-weight:800; letter-spacing:2px; text-transform:uppercase; }
+.hero h1 { color:#f8fbff; font-size:clamp(27px,4vw,42px); line-height:1.15; margin:10px 0 9px; font-weight:800; }
+.hero p { color:#c4d2ee; font-size:15px; margin:0; max-width:900px; }
+.section-card { border:1px solid #263858; background:rgba(15,23,42,.78); border-radius:18px; padding:18px 20px; margin:12px 0; }
+div[data-testid="stTextArea"] textarea, div[data-testid="stTextInput"] input { background:#101b31!important; color:#f1f5ff!important; border:1px solid #385078!important; border-radius:12px!important; }
+.stButton>button, .stDownloadButton>button { border-radius:12px; border:1px solid #38bdf8; background:linear-gradient(90deg,#0891b2,#6366f1); color:white; font-weight:700; min-height:44px; transition:all .2s ease; }
+.stButton>button:hover, .stDownloadButton>button:hover { border-color:#a5f3fc; color:white; box-shadow:0 0 22px rgba(34,211,238,.22); transform:translateY(-1px); }
+.stTabs [data-baseweb="tab-list"] { gap:7px; border-bottom:1px solid #2b3d5d; }
+.stTabs [data-baseweb="tab"] { background:#111d34; border:1px solid #263858; border-radius:10px 10px 0 0; color:#cbd5e1; padding:10px 14px; }
+.stTabs [aria-selected="true"] { background:#164e63!important; color:#ecfeff!important; border-color:#22d3ee!important; }
+[data-testid="stDataFrame"] { border:1px solid #2d4265; border-radius:12px; overflow:hidden; }
+.stAlert { border-radius:12px; }
+h1,h2,h3,h4 { color:#f1f5ff; }
+[data-testid="stMetric"] { background:#111d34; border:1px solid #2b4165; padding:14px; border-radius:14px; }
+hr { border-color:#263858; }
+</style>
+<div class="hero">
+  <div class="hero-kicker">ECE • DIGITAL DESIGN • AI WORKSPACE</div>
+  <h1>⚡ Agentic AI-Based Logic Gate Circuit Designer</h1>
+  <p>Describe a digital circuit in simple English. The AI plans and validates the gate connections, calculates the complete truth table, derives Boolean expressions, and generates Verilog in three coding styles.</p>
+</div>
+""", unsafe_allow_html=True)
+
+ALLOWED_GATES = {"AND", "OR", "NOT", "NAND", "NOR", "XOR", "XNOR"}
+MAX_INPUTS = 8
+MAX_GATES = 120
+IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
-# ==================================================
-# 2. API KEY
-# ==================================================
+# --------------------------- API KEY ---------------------------
 
 def get_api_key():
     try:
@@ -40,1047 +72,568 @@ def get_api_key():
             return key
     except Exception:
         pass
-
     return os.getenv("GEMINI_API_KEY", "")
 
 
-# ==================================================
-# 3. GEMINI AI WITH MODEL FALLBACK
-# ==================================================
+# --------------------------- VALIDATION AGENT ---------------------------
 
-def generate_with_ai(prompt):
-
-    api_key = get_api_key()
-
-    if not api_key:
-        raise ValueError(
-            "GEMINI_API_KEY not found. Add your existing key "
-            "in Streamlit Cloud → Settings → Secrets."
-        )
-
-    client = genai.Client(api_key=api_key)
-
-    instruction = f"""
-You are an expert digital logic circuit designer.
-
-Design the digital circuit requested below.
-
-USER REQUEST:
-{prompt}
-
-Return ONLY valid JSON. Do not use Markdown or code fences.
-
-Use exactly this structure:
-
-{{
-  "inputs": ["A", "B"],
-  "gates": [
-    {{
-      "id": "G1",
-      "type": "XOR",
-      "inputs": ["A", "B"]
-    }}
-  ],
-  "outputs": [
-    {{
-      "name": "Y",
-      "source": "G1"
-    }}
-  ],
-  "explanation": "Explain how the circuit works.",
-  "design_steps": [
-    "Step 1",
-    "Step 2"
-  ]
-}}
-
-IMPORTANT RULES:
-
-1. Supported gates: AND, OR, NOT, NAND, NOR, XOR, XNOR.
-2. Give every gate a unique ID: G1, G2, G3, etc.
-3. Gate inputs must be primary inputs or previously created gates.
-4. Create gates in topological order.
-5. NOT gates must have exactly one input.
-6. Other gates must have at least two inputs.
-7. Outputs must have a name and a source.
-8. Output sources must be primary inputs or gate IDs.
-9. Use multiple outputs when required, for example Full Adder Sum and Carry.
-10. Use actual logic gates, not arithmetic operations.
-11. Make sure the circuit implements the requested function correctly.
-12. Keep explanations simple.
-13. Return valid JSON only.
-"""
-
-    # Try these models in order.
-    models = [
-        "gemini-3.8-flash",
-        "gemini-3.6-flash",
-        "gemini-3.5-flash-lite"
-    ]
-
-    errors = []
-
-    for model_name in models:
-
-        # Retry each model up to two times for temporary errors.
-        for attempt in range(2):
-
-            try:
-                response = client.models.generate_content(
-                    model=model_name,
-                    contents=instruction
-                )
-
-                raw = response.text
-
-                if not raw:
-                    raise ValueError("Gemini returned an empty response.")
-
-                raw = raw.strip()
-
-                # Remove Markdown fences if present.
-                raw = re.sub(
-                    r"^```(?:json)?\s*",
-                    "",
-                    raw,
-                    flags=re.IGNORECASE
-                )
-                raw = re.sub(r"\s*```$", "", raw)
-
-                return json.loads(raw)
-
-            except Exception as error:
-
-                error_text = str(error)
-                errors.append(model_name + ": " + error_text)
-
-                temporary_error = any(
-                    word in error_text.upper()
-                    for word in [
-                        "503",
-                        "429",
-                        "500",
-                        "502",
-                        "504",
-                        "UNAVAILABLE",
-                        "RESOURCE_EXHAUSTED",
-                        "INTERNAL",
-                        "NOT FOUND",
-                        "404"
-                    ]
-                )
-
-                # Try another model for temporary/model availability errors.
-                if temporary_error:
-                    if attempt == 0:
-                        time.sleep(1)
-                        continue
-                    break
-
-                # Do not retry authentication or other permanent errors.
-                raise RuntimeError(
-                    f"Gemini request failed using {model_name}: {error_text}"
-                )
-
-    raise RuntimeError(
-        "All available Gemini model attempts failed. "
-        "Google's AI service may be temporarily busy.\n\n"
-        + "\n".join(errors[-3:])
-    )
-
-
-# ==================================================
-# 4. CIRCUIT VALIDATION
-# ==================================================
-
-VALID_GATES = {
-    "AND", "OR", "NOT", "NAND",
-    "NOR", "XOR", "XNOR"
-}
-
-
-def validate_circuit(circuit):
-
+def validate(circuit):
+    """Validate the AI netlist before using it in any output generator."""
     if not isinstance(circuit, dict):
-        raise ValueError("Invalid circuit response.")
+        raise ValueError("AI response must be a JSON object.")
 
-    inputs = circuit.get("inputs")
-    gates = circuit.get("gates")
-    outputs = circuit.get("outputs")
+    inputs = circuit.get("inputs", [])
+    gates = circuit.get("gates", [])
+    outputs = circuit.get("outputs", [])
 
-    if not isinstance(inputs, list) or not inputs:
-        raise ValueError("Circuit must contain primary inputs.")
+    if not outputs and circuit.get("output"):
+        outputs = [circuit["output"]]
 
-    if len(inputs) > 8:
-        raise ValueError("Maximum supported primary inputs: 8.")
+    if not isinstance(inputs, list) or not 1 <= len(inputs) <= MAX_INPUTS:
+        raise ValueError(f"Use between 1 and {MAX_INPUTS} primary input signals.")
 
+    if any(not isinstance(x, str) or not IDENTIFIER.fullmatch(x) for x in inputs):
+        raise ValueError("Input names must be valid Verilog identifiers, e.g. A, B, A0, SEL0.")
     if len(set(inputs)) != len(inputs):
-        raise ValueError("Duplicate primary input names.")
+        raise ValueError("Input names must be unique.")
 
-    for name in inputs:
-        if not isinstance(name, str):
-            raise ValueError("Invalid input name.")
+    if not isinstance(gates, list) or not 1 <= len(gates) <= MAX_GATES:
+        raise ValueError(f"The circuit must contain between 1 and {MAX_GATES} gates.")
 
-        if not re.fullmatch(r"[A-Za-z_]\w*", name):
-            raise ValueError("Invalid input name: " + name)
-
-    if not isinstance(gates, list):
-        raise ValueError("Invalid gate list.")
-
-    if not isinstance(outputs, list) or not outputs:
-        raise ValueError("Circuit must contain outputs.")
-
-    available = set(inputs)
+    known = set(inputs)
     gate_ids = set()
+    normalized_gates = []
 
-    for gate in gates:
+    for index, original in enumerate(gates, start=1):
+        if not isinstance(original, dict):
+            raise ValueError(f"Gate {index} is not a valid object.")
 
-        if not isinstance(gate, dict):
-            raise ValueError("Invalid gate information.")
+        gate = dict(original)
+        gate_type = str(gate.get("type", "")).upper().strip()
+        gate_id = str(gate.get("id", f"G{index}")).strip()
+        gate_inputs = gate.get("inputs", [])
+        gate_output = gate.get("output", "")
 
-        gid = gate.get("id")
-        gate_type = str(gate.get("type", "")).upper()
-        gate_inputs = gate.get("inputs")
+        if gate_type not in ALLOWED_GATES:
+            raise ValueError(f"Unsupported gate type: {gate_type}")
+        if not IDENTIFIER.fullmatch(gate_id) or gate_id in gate_ids:
+            raise ValueError(f"Invalid or duplicate gate ID: {gate_id}")
+        if not isinstance(gate_output, str) or not IDENTIFIER.fullmatch(gate_output):
+            raise ValueError(f"Gate {gate_id} has an invalid output signal name.")
+        if gate_output in known:
+            raise ValueError(f"Duplicate signal name: {gate_output}")
 
-        if not isinstance(gid, str):
-            raise ValueError("Invalid gate ID.")
-
-        if not re.fullmatch(r"[A-Za-z_]\w*", gid):
-            raise ValueError("Invalid gate ID: " + gid)
-
-        if gid in available:
-            raise ValueError("Duplicate gate ID: " + gid)
-
-        if gate_type not in VALID_GATES:
-            raise ValueError("Unsupported gate: " + gate_type)
-
-        if not isinstance(gate_inputs, list) or not gate_inputs:
-            raise ValueError("Gate " + gid + " has no inputs.")
-
-        if gate_type == "NOT" and len(gate_inputs) != 1:
-            raise ValueError("NOT gate needs exactly one input.")
-
-        if gate_type != "NOT" and len(gate_inputs) < 2:
+        expected = 1 if gate_type == "NOT" else 2
+        if not isinstance(gate_inputs, list) or len(gate_inputs) != expected:
+            raise ValueError(f"{gate_type} gate {gate_id} must have {expected} input(s).")
+        if any(not isinstance(signal, str) or signal not in known for signal in gate_inputs):
             raise ValueError(
-                gate_type + " gate needs at least two inputs."
+                f"Gate {gate_id} refers to an unknown signal. "
+                "List gates in execution order: source gates before dependent gates."
             )
 
-        for signal in gate_inputs:
-            if signal not in available:
-                raise ValueError(
-                    f"Gate {gid} uses unknown or not-yet-created "
-                    f"signal: {signal}"
-                )
-
+        gate["id"] = gate_id
         gate["type"] = gate_type
-        available.add(gid)
-        gate_ids.add(gid)
+        gate["inputs"] = gate_inputs
+        gate["output"] = gate_output
 
-    output_names = set()
+        normalized_gates.append(gate)
+        gate_ids.add(gate_id)
+        known.add(gate_output)
 
-    for output in outputs:
+    if not isinstance(outputs, list) or not outputs:
+        raise ValueError("Provide at least one output signal.")
+    if any(not isinstance(x, str) or x not in known for x in outputs):
+        raise ValueError("Every output must refer to a declared input or generated gate signal.")
+    if len(set(outputs)) != len(outputs):
+        raise ValueError("Output signal names must be unique.")
 
-        if not isinstance(output, dict):
-            raise ValueError("Invalid output information.")
-
-        name = output.get("name")
-        source = output.get("source")
-
-        if not isinstance(name, str):
-            raise ValueError("Invalid output name.")
-
-        if not re.fullmatch(r"[A-Za-z_]\w*", name):
-            raise ValueError("Invalid output name: " + name)
-
-        if name in available or name in output_names:
-            raise ValueError("Duplicate output name: " + name)
-
-        if source not in available:
-            raise ValueError("Unknown output source: " + str(source))
-
-        output_names.add(name)
-
+    circuit["inputs"] = inputs
+    circuit["gates"] = normalized_gates
+    circuit["outputs"] = outputs
+    circuit["output"] = outputs[0]
+    circuit["explanation"] = str(circuit.get("explanation", "Circuit generated from your requirement."))
+    circuit["design_steps"] = circuit.get("design_steps", [])
     return circuit
 
 
-# ==================================================
-# 5. LOGIC GATE EVALUATION
-# ==================================================
+# --------------------------- AI PLANNING AGENT ---------------------------
+
+def ask_ai(prompt, api_key, model):
+    client = genai.Client(api_key=api_key)
+
+    instructions = f"""
+You are the circuit-planning agent for an educational digital logic design tool.
+Convert the user's request into a combinational digital circuit made from basic gates.
+
+Return ONLY valid JSON. Do not add Markdown fences or extra text.
+Use exactly this schema:
+{{
+  "title": "short circuit title",
+  "inputs": ["A", "B"],
+  "gates": [
+    {{"id": "G1", "type": "AND", "inputs": ["A", "B"], "output": "W1"}},
+    {{"id": "G2", "type": "NOT", "inputs": ["W1"], "output": "Y"}}
+  ],
+  "outputs": ["Y"],
+  "explanation": "Explain the circuit in simple words.",
+  "design_steps": ["Step 1", "Step 2"]
+}}
+
+STRICT DESIGN RULES:
+- Allowed gates only: AND, OR, NOT, NAND, NOR, XOR, XNOR.
+- NOT has exactly one input. Every other gate has exactly two inputs.
+- Use scalar primary input names only, such as A, B, A0, A1, B0, B1, S0.
+- Maximum {MAX_INPUTS} primary input signals and maximum {MAX_GATES} gates.
+- Do not use bus names, brackets, constants, arithmetic operators, or undefined signals.
+- List gates in execution order. A gate can use only primary inputs or earlier gate outputs.
+- Give every gate a unique ID and a unique output signal.
+- Outputs must be names of primary inputs or gate outputs.
+- Use intermediate signals W1, W2, W3, etc.
+- Create every output requested by the user.
+- For a half adder, outputs should be Sum and Carry.
+- For a full adder, outputs should be Sum and Cout.
+- For multi-bit adders, use separate scalar bits (A0, A1, ... and B0, B1, ...).
+- For a multiplexer, include select inputs and implement the selection logic.
+- For a decoder/encoder, provide all required output signals.
+- For a comparator, provide the requested comparison outputs (for example GT, EQ, LT).
+- For complex circuits, create the complete gate network, not just a high-level block named after the circuit.
+- Use no sequential elements, clocks, flip-flops, latches or memories in this version.
+- Do not invent unsupported gate types.
+- Keep the explanation concise and technically correct.
+"""
+    response = client.models.generate_content(
+        model=model,
+        contents=instructions + "\n\nUSER CIRCUIT REQUIREMENT:\n" + prompt,
+    )
+
+    raw = (response.text or "").strip()
+    raw = re.sub(r"^```(?:json)?\s*", "", raw)
+    raw = re.sub(r"\s*```$", "", raw)
+
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", raw, flags=re.S)
+        if not match:
+            raise ValueError("AI did not return valid JSON. Try a clearer circuit description.")
+        data = json.loads(match.group(0))
+
+    return validate(data)
+
+
+# --------------------------- LOGIC EVALUATION AGENT ---------------------------
 
 def evaluate_gate(gate_type, values):
-
-    if gate_type == "AND":
-        return int(all(values))
-
-    if gate_type == "OR":
-        return int(any(values))
+    a = values[0]
+    b = values[1] if len(values) > 1 else None
 
     if gate_type == "NOT":
-        return 1 - values[0]
-
+        return 1 - a
+    if gate_type == "AND":
+        return a & b
+    if gate_type == "OR":
+        return a | b
     if gate_type == "NAND":
-        return 1 - int(all(values))
-
+        return 1 - (a & b)
     if gate_type == "NOR":
-        return 1 - int(any(values))
-
+        return 1 - (a | b)
     if gate_type == "XOR":
-        result = 0
-        for value in values:
-            result ^= value
-        return result
-
+        return a ^ b
     if gate_type == "XNOR":
-        result = 0
-        for value in values:
-            result ^= value
-        return 1 - result
-
-    raise ValueError("Unknown gate: " + gate_type)
+        return 1 - (a ^ b)
+    raise ValueError(f"Unsupported gate: {gate_type}")
 
 
-def calculate_outputs(circuit, input_values):
-
-    signals = dict(input_values)
-
+def evaluate_circuit(circuit, primary_values):
+    values = dict(primary_values)
     for gate in circuit["gates"]:
+        gate_inputs = [values[name] for name in gate["inputs"]]
+        values[gate["output"]] = evaluate_gate(gate["type"], gate_inputs)
+    return values
 
-        values = [
-            signals[name]
-            for name in gate["inputs"]
-        ]
-
-        signals[gate["id"]] = evaluate_gate(
-            gate["type"],
-            values
-        )
-
-    result = {}
-
-    for output in circuit["outputs"]:
-        result[output["name"]] = signals[output["source"]]
-
-    return result
-
-
-# ==================================================
-# 6. TRUTH TABLE
-# ==================================================
 
 def make_truth_table(circuit):
-
-    inputs = circuit["inputs"]
     rows = []
-
-    for combination in itertools.product(
-        [0, 1],
-        repeat=len(inputs)
-    ):
-
-        input_values = dict(zip(inputs, combination))
-
-        output_values = calculate_outputs(
-            circuit,
-            input_values
-        )
-
-        rows.append({
-            **input_values,
-            **output_values
-        })
-
+    for bits in itertools.product([0, 1], repeat=len(circuit["inputs"])):
+        primary = dict(zip(circuit["inputs"], bits))
+        values = evaluate_circuit(circuit, primary)
+        row = {name: values[name] for name in circuit["inputs"]}
+        row.update({name: values[name] for name in circuit["outputs"]})
+        rows.append(row)
     return pd.DataFrame(rows)
 
 
-# ==================================================
-# 7. BOOLEAN EXPRESSIONS
-# ==================================================
+# --------------------------- BOOLEAN EXPRESSION AGENT ---------------------------
 
-def boolean_expressions(circuit):
+VERILOG_OPERATOR = {
+    "AND": "&", "OR": "|", "NAND": "~&",
+    "NOR": "~|", "XOR": "^", "XNOR": "~^"
+}
+BOOLEAN_OPERATOR = {
+    "AND": "·", "OR": "+", "NAND": " NAND ",
+    "NOR": " NOR ", "XOR": " ⊕ ", "XNOR": " XNOR "
+}
 
-    expressions = {
-        name: name
-        for name in circuit["inputs"]
-    }
 
+def make_boolean_expressions(circuit):
+    expressions = {name: name for name in circuit["inputs"]}
     for gate in circuit["gates"]:
-
-        parts = [
-            expressions[name]
-            for name in gate["inputs"]
-        ]
-
-        gate_type = gate["type"]
-
-        if gate_type == "NOT":
-            expression = "~(" + parts[0] + ")"
-
-        elif gate_type == "AND":
-            expression = "(" + " & ".join(parts) + ")"
-
-        elif gate_type == "NAND":
-            expression = "~(" + " & ".join(parts) + ")"
-
-        elif gate_type == "OR":
-            expression = "(" + " | ".join(parts) + ")"
-
-        elif gate_type == "NOR":
-            expression = "~(" + " | ".join(parts) + ")"
-
-        elif gate_type == "XOR":
-            expression = "(" + " ^ ".join(parts) + ")"
-
-        elif gate_type == "XNOR":
-            expression = "~(" + " ^ ".join(parts) + ")"
-
+        if gate["type"] == "NOT":
+            expr = f"¬({expressions[gate['inputs'][0]]})"
         else:
-            raise ValueError("Unsupported gate.")
-
-        expressions[gate["id"]] = expression
-
-    result = {}
-
-    for output in circuit["outputs"]:
-        result[output["name"]] = expressions[output["source"]]
-
-    return result
+            left, right = [expressions[x] for x in gate["inputs"]]
+            expr = f"({left}{BOOLEAN_OPERATOR[gate['type']]}{right})"
+        expressions[gate["output"]] = expr
+    return {out: f"{out} = {expressions[out]}" for out in circuit["outputs"]}
 
 
-# ==================================================
-# 8. VERILOG GATE LEVEL
-# ==================================================
+# --------------------------- VERILOG GENERATORS ---------------------------
 
-def generate_gate_level(circuit):
-
-    inputs = circuit["inputs"]
-    outputs = [o["name"] for o in circuit["outputs"]]
-
+def verilog_header(circuit, style):
+    ports = circuit["inputs"] + circuit["outputs"]
     lines = [
-        "module logic_circuit(" +
-        ", ".join(inputs + outputs) + ");",
-        "",
-        "input " + ", ".join(inputs) + ";",
-        "output " + ", ".join(outputs) + ";",
-        ""
+        f"// {style} modeling style",
+        "// Generated from the validated gate-level circuit.",
+        "module logic_circuit(" + ", ".join(ports) + ");",
+        "input " + ", ".join(circuit["inputs"]) + ";",
     ]
+    return lines
 
-    internal = [
-        gate["id"]
-        for gate in circuit["gates"]
-    ]
 
+def make_dataflow_verilog(circuit):
+    outputs = set(circuit["outputs"])
+    lines = verilog_header(circuit, "DATAFLOW")
+    lines.append("output " + ", ".join(circuit["outputs"]) + ";")
+    internal = [g["output"] for g in circuit["gates"] if g["output"] not in outputs]
     if internal:
         lines.append("wire " + ", ".join(internal) + ";")
-        lines.append("")
-
-    for index, gate in enumerate(circuit["gates"], start=1):
-
-        primitive = gate["type"].lower()
-
-        connections = ", ".join(
-            [gate["id"]] + gate["inputs"]
-        )
-
-        lines.append(
-            f"{primitive} gate_{index}({connections});"
-        )
-
-    lines.append("")
-
-    for output in circuit["outputs"]:
-        lines.append(
-            f"assign {output['name']} = {output['source']};"
-        )
-
-    lines.extend(["", "endmodule"])
-
-    return "\n".join(lines)
-
-
-# ==================================================
-# 9. VERILOG DATAFLOW
-# ==================================================
-
-def generate_dataflow(circuit):
-
-    inputs = circuit["inputs"]
-    outputs = [o["name"] for o in circuit["outputs"]]
-
-    expressions = {
-        name: name
-        for name in inputs
-    }
-
-    lines = [
-        "module logic_circuit(" +
-        ", ".join(inputs + outputs) + ");",
-        "",
-        "input " + ", ".join(inputs) + ";",
-        "output " + ", ".join(outputs) + ";",
-        ""
-    ]
 
     for gate in circuit["gates"]:
-
-        parts = [
-            expressions[name]
-            for name in gate["inputs"]
-        ]
-
-        gate_type = gate["type"]
-
-        if gate_type == "NOT":
-            expression = "~(" + parts[0] + ")"
-
-        elif gate_type == "AND":
-            expression = " & ".join(parts)
-
-        elif gate_type == "NAND":
-            expression = "~(" + " & ".join(parts) + ")"
-
-        elif gate_type == "OR":
-            expression = " | ".join(parts)
-
-        elif gate_type == "NOR":
-            expression = "~(" + " | ".join(parts) + ")"
-
-        elif gate_type == "XOR":
-            expression = " ^ ".join(parts)
-
-        elif gate_type == "XNOR":
-            expression = "~(" + " ^ ".join(parts) + ")"
-
+        sig = gate["inputs"]
+        typ = gate["type"]
+        if typ == "NOT":
+            expression = f"~{sig[0]}"
+        elif typ in ("NAND", "NOR", "XNOR"):
+            expression = f"({sig[0]} {VERILOG_OPERATOR[typ]} {sig[1]})"
         else:
-            raise ValueError("Unsupported gate.")
+            expression = f"({sig[0]} {VERILOG_OPERATOR[typ]} {sig[1]})"
+        lines.append(f"assign {gate['output']} = {expression};")
 
-        expressions[gate["id"]] = "(" + expression + ")"
-
-    for output in circuit["outputs"]:
-
-        lines.append(
-            f"assign {output['name']} = "
-            f"{expressions[output['source']]};"
-        )
-
-    lines.extend(["", "endmodule"])
-
+    lines.append("endmodule")
     return "\n".join(lines)
 
 
-# ==================================================
-# 10. VERILOG BEHAVIORAL
-# ==================================================
+def make_gatelevel_verilog(circuit):
+    outputs = set(circuit["outputs"])
+    lines = verilog_header(circuit, "GATE LEVEL")
+    lines.append("output " + ", ".join(circuit["outputs"]) + ";")
+    internal = [g["output"] for g in circuit["gates"] if g["output"] not in outputs]
+    if internal:
+        lines.append("wire " + ", ".join(internal) + ";")
 
-def generate_behavioral(circuit):
+    primitive = {
+        "AND": "and", "OR": "or", "NOT": "not",
+        "NAND": "nand", "NOR": "nor", "XOR": "xor", "XNOR": "xnor"
+    }
+    for index, gate in enumerate(circuit["gates"], start=1):
+        connections = [gate["output"]] + gate["inputs"]
+        lines.append(f"{primitive[gate['type']]} gate{index}({', '.join(connections)});")
+    lines.append("endmodule")
+    return "\n".join(lines)
 
-    inputs = circuit["inputs"]
-    outputs = [o["name"] for o in circuit["outputs"]]
 
-    table = make_truth_table(circuit)
-
-    selector = "{" + ", ".join(inputs) + "}"
-
+def make_behavioral_verilog(circuit):
+    """Generate a combinational always block implementing the same validated netlist."""
+    outputs = set(circuit["outputs"])
     lines = [
-        "module logic_circuit(" +
-        ", ".join(inputs + outputs) + ");",
-        "",
-        "input " + ", ".join(inputs) + ";",
-        "output reg " + ", ".join(outputs) + ";",
-        "",
-        "always @(*) begin",
-        f"    case ({selector})"
+        "// BEHAVIORAL modeling style",
+        "// Combinational logic using an always @(*) block.",
+        "module logic_circuit(" + ", ".join(circuit["inputs"] + circuit["outputs"]) + ");",
+        "input " + ", ".join(circuit["inputs"]) + ";",
+        "output reg " + ", ".join(circuit["outputs"]) + ";",
     ]
+    internal = [g["output"] for g in circuit["gates"] if g["output"] not in outputs]
+    if internal:
+        lines.append("reg " + ", ".join(internal) + ";")
 
-    for _, row in table.iterrows():
-
-        binary = "".join(
-            str(int(row[name]))
-            for name in inputs
-        )
-
-        assignments = " ".join(
-            f"{name} = {int(row[name])};"
-            for name in outputs
-        )
-
-        lines.append(
-            f"        {len(inputs)}'b{binary}: begin "
-            f"{assignments} end"
-        )
-
-    lines.append("        default: begin")
-
-    for name in outputs:
-        lines.append(f"            {name} = 1'b0;")
-
-    lines.extend([
-        "        end",
-        "    endcase",
-        "end",
-        "",
-        "endmodule"
-    ])
-
+    lines.append("always @(*) begin")
+    for gate in circuit["gates"]:
+        sig = gate["inputs"]
+        typ = gate["type"]
+        if typ == "NOT":
+            expression = f"~{sig[0]}"
+        else:
+            expression = f"({sig[0]} {VERILOG_OPERATOR[typ]} {sig[1]})"
+        lines.append(f"    {gate['output']} = {expression};")
+    lines.append("end")
+    lines.append("endmodule")
     return "\n".join(lines)
 
 
-# ==================================================
-# 11. SVG LOGIC GATE DIAGRAM
-# ==================================================
+# --------------------------- SVG CIRCUIT DIAGRAM ---------------------------
 
-def graph(circuit):
-
-    inputs = circuit["inputs"]
+def make_gate_svg(circuit):
+    """Render recognizable gate outlines (not rectangular flowchart boxes)."""
     gates = circuit["gates"]
+    inputs = circuit["inputs"]
     outputs = circuit["outputs"]
 
-    if not gates:
-        return (
-            "<p>This circuit directly connects an input "
-            "to an output and does not need a gate.</p>"
+    depth = {}
+    for gate in gates:
+        depth[gate["output"]] = 1 + max(
+            [depth.get(signal, 0) for signal in gate["inputs"]],
+            default=0
         )
 
-    # Calculate gate depth.
-    levels = {}
-
+    layers = defaultdict(list)
     for gate in gates:
-        levels[gate["id"]] = 1 + max(
-            [levels.get(signal, 0) for signal in gate["inputs"]]
-        )
+        layers[depth[gate["output"]]].append(gate)
 
-    layers = {}
-
-    for gate in gates:
-        level = levels[gate["id"]]
-        layers.setdefault(level, []).append(gate)
-
-    max_level = max(levels.values())
-    max_layer_count = max(len(v) for v in layers.values())
-
-    max_rows = max(
-        len(inputs),
-        len(outputs),
-        max_layer_count,
-        1
-    )
-
-    height = max(380, 120 + max_rows * 115)
-    width = 300 + max_level * 210 + 300
-
-    left = 260
-    col_gap = 210
+    max_depth = max(depth.values(), default=1)
+    x_step = 190
+    gate_x_start = 220
+    max_layer_count = max([len(v) for v in layers.values()] + [1])
+    height = max(260, 115 * max(len(inputs), max_layer_count, len(outputs)) + 80)
+    width = gate_x_start + max_depth * x_step + 180
 
     positions = {}
-    gate_boxes = {}
+    for level, layer_gates in layers.items():
+        for row, gate in enumerate(layer_gates):
+            y = 65 + row * 115
+            positions[gate["output"]] = (gate_x_start + (level - 1) * x_step, y)
 
-    def row_y(index, count):
-        return 65 + (height - 130) * (index + 1) / (count + 1)
+    input_positions = {
+        name: (35, 70 + index * 105)
+        for index, name in enumerate(inputs)
+    }
 
-    # Primary input positions.
-    for index, name in enumerate(inputs):
-        positions[name] = (145, row_y(index, len(inputs)))
+    signal_points = {
+        name: (x + 45, y + 8)
+        for name, (x, y) in input_positions.items()
+    }
 
-    # Gate positions.
-    for level in range(1, max_level + 1):
-
-        items = layers.get(level, [])
-
-        for index, gate in enumerate(items):
-
-            gx = left + (level - 1) * col_gap
-            gy = row_y(index, len(items))
-
-            gate_boxes[gate["id"]] = (gx, gy)
-
-            # Output connection position.
-            positions[gate["id"]] = (gx + 115, gy)
-
-    svg = [
-        f'<svg xmlns="http://www.w3.org/2000/svg" '
-        f'width="100%" height="{height}" '
-        f'viewBox="0 0 {width} {height}">',
-        '<rect width="100%" height="100%" fill="white"/>',
-        '<style>',
-        '.wire{stroke:#222;stroke-width:2;fill:none}',
-        '.gate{stroke:#111;stroke-width:2.5;fill:#eaf3ff}',
-        '.label{font:15px Arial;fill:#111}',
-        '.small{font:12px Arial;fill:#111}',
-        '</style>'
+    parts = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="100%" viewBox="0 0 {width} {height}" role="img" aria-label="Logic gate circuit">',
+        """<defs><style>
+        .wire{stroke:#334155;stroke-width:2.2;fill:none;stroke-linecap:round;stroke-linejoin:round}
+        .gate{stroke:#155e9a;stroke-width:2.4;fill:#eaf4ff}
+        .txt{font: bold 13px Arial;fill:#12304a}
+        .pin{font:12px Arial;fill:#334155}
+        .bubble{stroke:#155e9a;stroke-width:2.2;fill:white}
+        </style></defs>""",
+        f'<rect x="1" y="1" width="{width-2}" height="{height-2}" rx="12" fill="#fff" stroke="#dbe4ee"/>'
     ]
 
-    # Draw input labels and short wires.
-    for name in inputs:
+    for name, (x, y) in input_positions.items():
+        parts.append(f'<text x="{x}" y="{y}" class="txt">{html.escape(name)}</text>')
+        parts.append(f'<circle cx="{x+45}" cy="{y+8}" r="3.5" fill="#155e9a"/>')
 
-        x, y = positions[name]
-
-        svg.append(
-            f'<text class="label" x="{x-55}" y="{y+5}" '
-            f'text-anchor="end">{html.escape(name)}</text>'
-        )
-
-        svg.append(
-            f'<path class="wire" d="M{x-45} {y} H{x}"/>'
-        )
-
-    # Draw each gate and its input wires.
     for gate in gates:
+        gx, gy = positions[gate["output"]]
+        typ = gate["type"]
+        pin_ys = [gy + 25] if typ == "NOT" else [gy + 20, gy + 50]
 
-        gid = gate["id"]
-        gate_type = gate["type"]
+        for idx, source in enumerate(gate["inputs"]):
+            sx, sy = signal_points[source]
+            tx, ty = gx, pin_ys[idx]
+            bend = max(sx + 18, tx - 22)
+            parts.append(f'<path class="wire" d="M{sx} {sy} H{bend} V{ty} H{tx}"/>')
 
-        gx, gy = gate_boxes[gid]
+        if typ in ("AND", "NAND"):
+            parts.append(f'<path class="gate" d="M{gx} {gy} L{gx+48} {gy} A35 35 0 0 1 {gx+48} {gy+70} L{gx} {gy+70} Z"/>')
+        elif typ in ("OR", "NOR", "XOR", "XNOR"):
+            parts.append(f'<path class="gate" d="M{gx} {gy} Q{gx+42} {gy+3} {gx+100} {gy+35} Q{gx+42} {gy+67} {gx} {gy+70} Q{gx+25} {gy+35} {gx} {gy} Z"/>')
+            if typ in ("XOR", "XNOR"):
+                parts.append(f'<path class="wire" d="M{gx-10} {gy} Q{gx+15} {gy+35} {gx-10} {gy+70}"/>')
+        elif typ == "NOT":
+            parts.append(f'<path class="gate" d="M{gx} {gy} L{gx+82} {gy+35} L{gx} {gy+70} Z"/>')
 
-        gate_inputs = gate["inputs"]
-        count = len(gate_inputs)
+        inverted = typ in ("NAND", "NOR", "NOT", "XNOR")
+        if inverted:
+            parts.append(f'<circle class="bubble" cx="{gx+105}" cy="{gy+35}" r="5"/>')
+        out_x = gx + (112 if inverted else 100)
+        out_y = gy + 35
+        parts.append(f'<text class="txt" x="{gx+45}" y="{gy+40}" text-anchor="middle">{html.escape(typ)}</text>')
+        parts.append(f'<text class="pin" x="{gx+48}" y="{gy+91}" text-anchor="middle">{html.escape(gate["id"])}</text>')
+        parts.append(f'<circle cx="{out_x}" cy="{out_y}" r="3.5" fill="#155e9a"/>')
+        signal_points[gate["output"]] = (out_x, out_y)
 
-        port_positions = [
-            gy + (i - (count - 1) / 2) * 22
-            for i in range(count)
-        ]
-
-        for signal, py in zip(gate_inputs, port_positions):
-
-            sx, sy = positions[signal]
-            mid = (sx + gx) / 2
-
-            svg.append(
-                f'<path class="wire" '
-                f'd="M{sx} {sy} H{mid} V{py} H{gx}"/>'
-            )
-
-        # AND and NAND symbols.
-        if gate_type in ("AND", "NAND"):
-
-            svg.append(
-                f'<path class="gate" '
-                f'd="M{gx} {gy-30} H{gx+43} '
-                f'A30 30 0 0 1 {gx+43} {gy+30} '
-                f'H{gx} Z"/>'
-            )
-
-            if gate_type == "NAND":
-
-                svg.append(
-                    f'<circle cx="{gx+80}" cy="{gy}" r="6" '
-                    f'fill="white" stroke="#111" stroke-width="2"/>'
-                )
-
-                out_x = gx + 86
-
-            else:
-                out_x = gx + 75
-
-        # NOT symbol.
-        elif gate_type == "NOT":
-
-            svg.append(
-                f'<polygon class="gate" '
-                f'points="{gx},{gy-29} {gx},{gy+29} '
-                f'{gx+78},{gy}"/>'
-            )
-
-            svg.append(
-                f'<circle cx="{gx+84}" cy="{gy}" r="6" '
-                f'fill="white" stroke="#111" stroke-width="2"/>'
-            )
-
-            out_x = gx + 90
-
-        # OR, NOR, XOR and XNOR symbols.
-        else:
-
-            svg.append(
-                f'<path class="gate" '
-                f'd="M{gx} {gy-30} '
-                f'Q{gx+28} {gy} {gx} {gy+30} '
-                f'Q{gx+35} {gy+30} {gx+83} {gy} '
-                f'Q{gx+35} {gy-30} {gx} {gy-30} Z"/>'
-            )
-
-            if gate_type in ("XOR", "XNOR"):
-
-                svg.append(
-                    f'<path d="M{gx-9} {gy-30} '
-                    f'Q{gx+19} {gy} {gx-9} {gy+30}" '
-                    f'fill="none" stroke="#111" stroke-width="2.5"/>'
-                )
-
-            if gate_type in ("NOR", "XNOR"):
-
-                svg.append(
-                    f'<circle cx="{gx+90}" cy="{gy}" r="6" '
-                    f'fill="white" stroke="#111" stroke-width="2"/>'
-                )
-
-                out_x = gx + 96
-
-            else:
-                out_x = gx + 84
-
-        svg.append(
-            f'<text class="small" x="{gx+38}" y="{gy+5}" '
-            f'text-anchor="middle">{gate_type}</text>'
-        )
-
-        # Connect gate output to its signal position.
-        svg.append(
-            f'<path class="wire" '
-            f'd="M{out_x} {gy} H{positions[gid][0]}"/>'
-        )
-
-    # Draw output wires and names.
+    # Draw output labels at the right of their source signals.
     for index, output in enumerate(outputs):
+        sx, sy = signal_points[output]
+        label_x = width - 85
+        # Route output wire to the right edge.
+        parts.append(f'<path class="wire" d="M{sx} {sy} H{label_x-10}"/>')
+        parts.append(f'<circle cx="{label_x-10}" cy="{sy}" r="3.5" fill="#155e9a"/>')
+        parts.append(f'<text class="txt" x="{label_x}" y="{sy+5}">{html.escape(output)}</text>')
 
-        source = output["source"]
-        sx, sy = positions[source]
-
-        oy = row_y(index, len(outputs))
-        end_x = width - 135
-
-        svg.append(
-            f'<path class="wire" '
-            f'd="M{sx} {sy} H{end_x} V{oy} H{end_x+30}"/>'
-        )
-
-        svg.append(
-            f'<text class="label" x="{end_x+38}" y="{oy+5}">'
-            f'{html.escape(output["name"])}</text>'
-        )
-
-    svg.append("</svg>")
-
-    return "\n".join(svg)
+    parts.append("</svg>")
+    return "".join(parts)
 
 
-# ==================================================
-# 12. PROMPT FORM
-# ==================================================
+# --------------------------- UI ---------------------------
 
-with st.form("circuit_form"):
-
-    prompt = st.text_area(
-        "Describe your logic circuit:",
-        placeholder=(
-            "Example: Design a full adder with inputs A, B and Cin."
-        ),
-        height=120
+with st.sidebar:
+    st.header("⚙️ AI Settings")
+    api_key = st.text_input(
+        "Gemini API key",
+        value=get_api_key(),
+        type="password",
+        help="Reuse your existing active Gemini API key. Do not share it."
+    )
+    model_name = st.text_input("Gemini model", value="gemini-2.5-flash")
+    st.caption("If this model is unavailable for your key, enter a model name enabled in your Google AI Studio account.")
+    st.divider()
+    st.markdown("**Agent workflow**")
+    st.markdown(
+        "1. Understand prompt\n"
+        "2. Plan gate network\n"
+        "3. Validate connections\n"
+        "4. Calculate truth table\n"
+        "5. Generate three Verilog styles"
     )
 
-    submitted = st.form_submit_button(
-        "⚡ Generate Logic Circuit",
-        type="primary"
-    )
+examples = [
+    "Design a half adder with Sum and Carry outputs.",
+    "Design a full adder with Sum and Cout outputs.",
+    "Design a 2-to-1 multiplexer using logic gates.",
+    "Design a 2-to-4 decoder with active-high outputs.",
+    "Design a 2-bit magnitude comparator with GT, EQ and LT outputs.",
+    "Design a 4-bit ripple carry adder. Use scalar inputs A0 to A3 and B0 to B3."
+]
 
+st.markdown("### 🧠 Describe your circuit")
+st.caption("Enter the circuit requirement below, or choose one of the example prompts.")
+prompt = st.text_area(
+    "Circuit requirement",
+    value=examples[0],
+    height=115,
+    placeholder="Example: Design a full adder with inputs A, B, Cin and outputs Sum, Cout."
+)
 
-# ==================================================
-# 13. GENERATE CIRCUIT
-# ==================================================
+with st.expander("Example circuit prompts"):
+    for item in examples:
+        st.write("• " + item)
 
-if submitted:
-
+if st.button("⚡ Generate Circuit", type="primary", use_container_width=True):
     if not prompt.strip():
-
-        st.warning("Please enter a circuit description.")
-
+        st.error("Please enter a circuit description.")
+    elif not api_key.strip():
+        st.error("Gemini API key is missing. Add your existing key in the sidebar or Streamlit Secrets.")
     else:
+        with st.spinner("AI agent is planning the circuit and checking its gate connections..."):
+            try:
+                generated = ask_ai(prompt.strip(), api_key.strip(), model_name.strip())
+                st.session_state["circuit"] = generated
+                st.session_state["generation_error"] = None
+                st.session_state["generation_prompt"] = prompt.strip()
+                st.success("Circuit plan generated and passed structural validation.")
+            except Exception as error:
+                st.session_state["generation_error"] = str(error)
+                st.error("Circuit generation failed. No fallback circuit is being shown as if it were your requested answer.")
+                with st.expander("Technical error details"):
+                    st.code(str(error))
 
-        try:
+# --------------------------- RESULTS ---------------------------
 
-            with st.spinner(
-                "AI is designing your circuit. Please wait..."
-            ):
-
-                circuit = generate_with_ai(prompt)
-                circuit = validate_circuit(circuit)
-
-                # Test the circuit calculations before saving.
-                make_truth_table(circuit)
-
-                # Test all code generators.
-                generate_gate_level(circuit)
-                generate_dataflow(circuit)
-                generate_behavioral(circuit)
-
-            st.session_state["circuit"] = circuit
-            st.success("Circuit generated successfully!")
-
-        except Exception as error:
-
-            st.error("Circuit generation failed.")
-            st.write(str(error))
-
-            if "All available Gemini model attempts failed" in str(error):
-                st.warning(
-                    "This is a temporary AI service availability problem. "
-                    "Wait a little and try again. Your project code and "
-                    "API key do not need to be recreated."
-                )
-
-
-# ==================================================
-# 14. DISPLAY CIRCUIT RESULTS
-# ==================================================
-
-if "circuit" in st.session_state:
-
+if st.session_state.get("circuit"):
     circuit = st.session_state["circuit"]
-
     st.divider()
-    st.header("1. Logic Circuit Diagram")
-
-    try:
-
-        svg_code = graph(circuit)
-
-        components.html(
-            svg_code,
-            height=650,
-            scrolling=True
-        )
-
-    except Exception as error:
-
-        st.error("Circuit diagram could not be displayed.")
-        st.write(str(error))
-
-    st.divider()
-    st.header("2. Circuit Details")
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        st.write("**Primary Inputs**")
-        st.write(", ".join(circuit["inputs"]))
-
-    with col2:
-        st.write("**Outputs**")
-        st.write(
-            ", ".join(
-                output["name"]
-                for output in circuit["outputs"]
-            )
-        )
-
-    st.write("**Gates Used**")
-
-    gate_table = pd.DataFrame([
-        {
-            "Gate ID": gate["id"],
-            "Gate Type": gate["type"],
-            "Gate Inputs": ", ".join(gate["inputs"])
-        }
-        for gate in circuit["gates"]
-    ])
-
-    if not gate_table.empty:
-        st.dataframe(
-            gate_table,
-            use_container_width=True
-        )
-
-    st.divider()
-    st.header("3. Truth Table")
-
-    truth_table = make_truth_table(circuit)
-
-    st.dataframe(
-        truth_table,
-        use_container_width=True
+    st.markdown("### ✨ Your generated design")
+    st.subheader(str(circuit.get("title", "Logic Circuit")))
+    st.caption(
+        f"{len(circuit['inputs'])} primary inputs · "
+        f"{len(circuit['gates'])} gates · "
+        f"{len(circuit['outputs'])} outputs"
     )
 
-    st.divider()
-    st.header("4. Boolean Expressions")
-
-    expressions = boolean_expressions(circuit)
-
-    for name, expression in expressions.items():
-
-        st.write(f"**Output {name}**")
-        st.code(
-            f"{name} = {expression}",
-            language="text"
-        )
-
-    st.divider()
-    st.header("5. Circuit Explanation")
-
-    st.write(
-        circuit.get(
-            "explanation",
-            "Explanation is not available."
-        )
-    )
-
-    st.write("**Design Steps**")
-
-    for index, step in enumerate(
-        circuit.get("design_steps", []),
-        start=1
-    ):
-        st.write(f"{index}. {step}")
-
-    st.divider()
-    st.header("6. Verilog Code")
-
-    gate_code = generate_gate_level(circuit)
-    dataflow_code = generate_dataflow(circuit)
-    behavioral_code = generate_behavioral(circuit)
-
-    tab1, tab2, tab3 = st.tabs([
-        "Gate Level",
-        "Dataflow",
-        "Behavioral"
+    tabs = st.tabs([
+        "Circuit Diagram",
+        "Truth Table",
+        "Boolean Expression",
+        "Behavioral Verilog",
+        "Dataflow Verilog",
+        "Gate-Level Verilog",
+        "Explanation"
     ])
 
-    with tab1:
-
-        st.subheader("Gate-Level Modelling")
-        st.caption("Uses built-in Verilog gate primitives.")
-
-        st.code(
-            gate_code,
-            language="verilog"
-        )
-
+    with tabs[0]:
+        st.markdown("**Actual logic gate symbols with connecting wires**")
+        svg = make_gate_svg(circuit)
+        st.components.v1.html(svg, height=max(300, 115 * max(len(circuit["inputs"]), len(circuit["gates"]))), scrolling=True)
         st.download_button(
-            "Download Gate-Level Verilog",
-            gate_code,
-            file_name="gate_level.v",
-            mime="text/plain"
+            "Download circuit diagram (SVG)",
+            data=svg,
+            file_name="logic_circuit.svg",
+            mime="image/svg+xml"
         )
 
-    with tab2:
+    with tabs[1]:
+        if len(circuit["inputs"]) > 8:
+            st.warning("Truth table is limited to 8 input bits to avoid an excessively large table.")
+        else:
+            truth = make_truth_table(circuit)
+            st.dataframe(truth, use_container_width=True, hide_index=True)
+            st.caption(f"{len(truth)} input combinations calculated directly from the validated gate network.")
 
-        st.subheader("Dataflow Modelling")
-        st.caption("Uses continuous assign statements.")
+    with tabs[2]:
+        expressions = make_boolean_expressions(circuit)
+        for output_name, expression in expressions.items():
+            st.code(expression, language="text")
 
-        st.code(
-            dataflow_code,
-            language="verilog"
-        )
-
-        st.download_button(
-            "Download Dataflow Verilog",
-            dataflow_code,
-            file_name="dataflow.v",
-            mime="text/plain"
-        )
-
-    with tab3:
-
-        st.subheader("Behavioral Modelling")
-        st.caption("Uses always and case statements.")
-
-        st.code(
-            behavioral_code,
-            language="verilog"
-        )
-
+    with tabs[3]:
+        behavioral = make_behavioral_verilog(circuit)
+        st.code(behavioral, language="verilog")
         st.download_button(
             "Download Behavioral Verilog",
-            behavioral_code,
-            file_name="behavioral.v",
+            data=behavioral,
+            file_name="logic_circuit_behavioral.v",
             mime="text/plain"
         )
 
-    st.success("All three Verilog versions have been generated.")
+    with tabs[4]:
+        dataflow = make_dataflow_verilog(circuit)
+        st.code(dataflow, language="verilog")
+        st.download_button(
+            "Download Dataflow Verilog",
+            data=dataflow,
+            file_name="logic_circuit_dataflow.v",
+            mime="text/plain"
+        )
+
+    with tabs[5]:
+        gatelevel = make_gatelevel_verilog(circuit)
+        st.code(gatelevel, language="verilog")
+        st.download_button(
+            "Download Gate-Level Verilog",
+            data=gatelevel,
+            file_name="logic_circuit_gatelevel.v",
+            mime="text/plain"
+        )
+
+    with tabs[6]:
+        st.markdown("**Circuit explanation**")
+        st.write(circuit.get("explanation", "No explanation was returned."))
+        steps = circuit.get("design_steps", [])
+        if steps:
+            st.markdown("**AI design steps**")
+            for number, step in enumerate(steps, start=1):
+                st.write(f"{number}. {step}")
+        st.markdown("**Validation performed**")
+        st.success(
+            "All gate types, signal names, gate input counts, execution order, "
+            "and output references were checked before generating the results. "
+            "The truth table is calculated locally from the same gate network."
+        )
+
+    st.info(
+        "Scope note: This version supports combinational circuits represented by the listed basic gates. "
+        "Sequential circuits such as counters, registers and flip-flops need clock/state modeling and are not "
+        "yet supported by this netlist format. For important designs, simulate the downloaded Verilog in a "
+        "Verilog simulator before hardware use."
+    )
+else:
+    st.info("Enter a circuit requirement and click Generate Circuit. The app will create the diagram, truth table, Boolean expressions and three Verilog styles.")
+    st.markdown("**Supported gate types:** AND, OR, NOT, NAND, NOR, XOR and XNOR.")
+    st.markdown("**Try:** half adder, full adder, multiplexer, decoder, encoder, comparator, or a multi-bit combinational circuit.")
