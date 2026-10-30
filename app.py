@@ -1,153 +1,225 @@
 
 def graph(circuit):
     import html
+    from collections import defaultdict
 
     inputs = circuit["inputs"]
     gates = circuit["gates"]
     output = circuit["output"]
 
-    gate_map = {g["id"]: g for g in gates}
+    # Calculate logic levels
+    levels = {name: 0 for name in inputs}
 
-    # Calculate gate levels
-    levels = {}
     for gate in gates:
-        parent_levels = [
-            levels.get(signal, 0)
-            for signal in gate["inputs"]
-        ]
-        levels[gate["id"]] = max(parent_levels, default=0) + 1
+        levels[gate["id"]] = max(
+            levels[s] for s in gate["inputs"]
+        ) + 1
+
+    # Group gates according to their logic level
+    grouped = defaultdict(list)
+
+    for gate in gates:
+        grouped[levels[gate["id"]]].append(gate)
 
     max_level = max(levels.values(), default=0)
-    width = 260 + (max_level + 1) * 190
-    height = max(300, (len(inputs) + len(gates) + 1) * 115)
+
+    gate_w = 90
+    gate_h = 70
+    col_gap = 190
+    row_gap = 120
+    left = 120
+    top = 100
+
+    max_rows = max(
+        [len(inputs), len(gates), 1]
+    )
+
+    width = left + (max_level + 1) * col_gap + 230
+    height = max(300, top * 2 + (max_rows - 1) * row_gap + 80)
 
     positions = {}
 
     # Input positions
     for i, name in enumerate(inputs):
-        positions[name] = (70, 90 + i * 110)
+        positions[name] = (left, top + i * row_gap)
 
     # Gate positions
-    for i, gate in enumerate(gates):
-        x = 220 + levels[gate["id"]] * 180
-        y = 90 + i * 115
-        positions[gate["id"]] = (x, y)
+    gate_positions = {}
+
+    for level, level_gates in grouped.items():
+        for i, gate in enumerate(level_gates):
+            x = left + level * col_gap
+            y = top + i * row_gap
+
+            gate_positions[gate["id"]] = (x, y)
+            positions[gate["id"]] = (x + gate_w + 15, y)
 
     svg = [
         f'<svg xmlns="http://www.w3.org/2000/svg" '
         f'width="100%" viewBox="0 0 {width} {height}">',
-        '<rect width="100%" height="100%" fill="white"/>'
+        '<rect width="100%" height="100%" fill="white"/>',
+        '<style>'
+        '.wire{stroke:#202020;stroke-width:2.5;fill:none}'
+        '.gate{fill:#fff0bd;stroke:#202020;stroke-width:2.5}'
+        '.bubble{fill:white;stroke:#202020;stroke-width:2.5}'
+        'text{font-family:Arial,sans-serif;fill:#111}'
+        '</style>'
     ]
 
+    # Right-angle connected wires
     def line(x1, y1, x2, y2):
+        mid = (x1 + x2) / 2
+
         return (
-            f'<path d="M{x1} {y1} L{x2} {y2}" '
-            'stroke="black" stroke-width="2.5" fill="none"/>'
+            f'<path class="wire" '
+            f'd="M{x1},{y1} H{mid} V{y2} H{x2}"/>'
         )
 
-    # Draw input wires and labels
+    # Draw primary inputs
     for name in inputs:
         x, y = positions[name]
+
         svg.append(
-            f'<text x="{x-35}" y="{y+6}" font-size="20">'
-            f'{html.escape(name)}</text>'
+            f'<text x="{x-20}" y="{y+6}" '
+            f'text-anchor="end" font-size="19" '
+            f'font-weight="bold">{html.escape(name)}</text>'
         )
 
-    # Draw each gate and its connections
+        svg.append(
+            f'<circle cx="{x}" cy="{y}" r="4" fill="black"/>'
+        )
+
+    # Draw gates
     for gate in gates:
+
         gid = gate["id"]
         kind = gate["type"].upper()
-        x, y = positions[gid]
-        gx = x
-        gy = y - 30
 
-        # Gate dimensions
-        w, h = 85, 65
+        gx, cy = gate_positions[gid]
 
-        # Connect input signals
-        for j, signal in enumerate(gate["inputs"]):
+        gy = cy - gate_h / 2
+        right = gx + gate_w
+
+        # Calculate gate input port positions
+        count = len(gate["inputs"])
+
+        if count == 1:
+            ports = [cy]
+        else:
+            spacing = min(24, 48 / (count - 1))
+            ports = [
+                cy + (i - (count - 1) / 2) * spacing
+                for i in range(count)
+            ]
+
+        # Connect all input signals
+        for signal, py in zip(gate["inputs"], ports):
             sx, sy = positions[signal]
-            port_y = y + (j - (len(gate["inputs"]) - 1) / 2) * 18
+            line_start = sx + 5
 
-            svg.append(line(sx + 35, sy, gx, port_y))
+            svg.append(
+                line(line_start, sy, gx, py)
+            )
 
-        # Gate body paths
+        # AND and NAND gate symbols
         if kind in ("AND", "NAND"):
+
             path = (
-                f"M{gx} {gy} L{gx+35} {gy} "
-                f"A32 32 0 0 1 {gx+35} {gy+65} "
-                f"L{gx} {gy+65} Z"
-            )
-            svg.append(
-                f'<path d="{path}" fill="#fff0bd" '
-                'stroke="black" stroke-width="2.5"/>'
+                f'M{gx},{gy} '
+                f'L{gx+43},{gy} '
+                f'A35,35 0 0 1 {gx+43},{gy+70} '
+                f'L{gx},{gy+70} Z'
             )
 
-        elif kind in ("OR", "NOR", "XOR", "XNOR"):
-            path = (
-                f"M{gx} {gy} "
-                f'Q{gx+25} {gy+32} {gx} {gy+65} '
-                f'Q{gx+48} {gy+65} {gx+85} {gy+32} '
-                f'Q{gx+48} {gy} {gx} {gy} Z'
-            )
             svg.append(
-                f'<path d="{path}" fill="#fff0bd" '
-                'stroke="black" stroke-width="2.5"/>'
+                f'<path class="gate" d="{path}"/>'
             )
 
+        # NOT gate symbol
+        elif kind == "NOT":
+
+            path = (
+                f'M{gx},{gy} '
+                f'L{gx},{gy+70} '
+                f'L{right-10},{cy} Z'
+            )
+
+            svg.append(
+                f'<path class="gate" d="{path}"/>'
+            )
+
+        # OR, NOR, XOR and XNOR symbols
+        else:
+
+            path = (
+                f'M{gx},{gy} '
+                f'Q{gx+25},{cy} {gx},{gy+70} '
+                f'Q{gx+55},{gy+70} {right},{cy} '
+                f'Q{gx+55},{gy} {gx},{gy} Z'
+            )
+
+            svg.append(
+                f'<path class="gate" d="{path}"/>'
+            )
+
+            # Extra curved line for XOR and XNOR
             if kind in ("XOR", "XNOR"):
-                svg.append(
-                    f'<path d="M{gx-9} {gy} '
-                    f'Q{gx+16} {gy+32} {gx-9} {gy+65}" '
-                    'fill="none" stroke="black" stroke-width="2.5"/>'
+
+                extra = (
+                    f'M{gx-11},{gy} '
+                    f'Q{gx+13},{cy} {gx-11},{gy+70}'
                 )
 
-        elif kind == "NOT":
+                svg.append(
+                    f'<path d="{extra}" fill="none" '
+                    f'stroke="black" stroke-width="2.5"/>'
+                )
+
+        # Output inversion bubbles
+        inverted = kind in ("NAND", "NOR", "XNOR", "NOT")
+
+        if inverted:
+
             svg.append(
-                f'<path d="M{gx} {gy} L{gx} {gy+65} '
-                f'L{gx+75} {gy+32} Z" '
-                'fill="#fff0bd" stroke="black" stroke-width="2.5"/>'
+                f'<circle class="bubble" '
+                f'cx="{right+6}" cy="{cy}" r="6"/>'
             )
 
-        else:
-            svg.append(
-                f'<rect x="{gx}" y="{gy}" width="85" height="65" '
-                'fill="#fff0bd" stroke="black" stroke-width="2.5"/>'
-            )
+            output_x = right + 12
 
-        # Inversion bubbles
-        if kind in ("NAND", "NOR", "XNOR", "NOT"):
-            svg.append(
-                f'<circle cx="{gx+91}" cy="{y+2}" r="6" '
-                'fill="white" stroke="black" stroke-width="2"/>'
-            )
-            out_x = gx + 97
         else:
-            out_x = gx + 85
+            output_x = right
 
         # Gate name
         svg.append(
-            f'<text x="{gx+38}" y="{y+7}" '
-            'font-size="15" text-anchor="middle">'
-            f'{html.escape(kind)}</text>'
+            f'<text x="{gx+43}" y="{cy+5}" '
+            f'text-anchor="middle" font-size="11" '
+            f'font-weight="bold">{html.escape(kind)}</text>'
         )
 
-        positions[gid] = (out_x, y)
+        # Store actual gate output position
+        positions[gid] = (output_x + 5, cy)
 
-    # Final output connection
+    # Final output
     ox, oy = positions[output]
-    end_x = width - 90
 
-    svg.append(line(ox, oy, end_x, oy))
+    end_x = max(width - 120, ox + 70)
+
     svg.append(
-        f'<circle cx="{end_x+25}" cy="{oy}" r="25" '
-        'fill="#d5f4e3" stroke="black" stroke-width="2.5"/>'
+        line(ox, oy, end_x, oy)
     )
+
     svg.append(
-        f'<text x="{end_x+25}" y="{oy+6}" '
-        'font-size="18" text-anchor="middle">'
-        f'{html.escape(output)}</text>'
+        f'<circle cx="{end_x+28}" cy="{oy}" r="23" '
+        f'fill="#d5f4e3" stroke="black" stroke-width="2.5"/>'
+    )
+
+    svg.append(
+        f'<text x="{end_x+28}" y="{oy+6}" '
+        f'text-anchor="middle" font-size="17" '
+        f'font-weight="bold">{html.escape(output)}</text>'
     )
 
     svg.append('</svg>')
+
     return "".join(svg)
